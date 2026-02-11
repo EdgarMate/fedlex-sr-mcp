@@ -143,6 +143,64 @@ class FedlexClient:
             print(f"Error fetching SR {sr_number}: {e}")
             return None
 
+    def fetch_article_text(self, sr_number: str, article_id: str):
+        """
+        Fetches the metadata and deep link for a specific article.
+        Returns a dictionary with title, link, and a message about the text.
+        """
+        # Clean article_id for SPARQL (e.g., 'Art. 41' or just '41')
+        id_query = f"Art. {article_id}" if not str(article_id).startswith("Art.") else article_id
+        
+        sparql_query = f"""
+        PREFIX jolux: <http://data.legilux.public.lu/resource/ontology/jolux#>
+        PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+        PREFIX language: <http://publications.europa.eu/resource/authority/language/>
+
+        SELECT DISTINCT ?title ?eli
+        WHERE {{
+          ?node skos:notation "{sr_number}" .
+          ?law jolux:classifiedByTaxonomyEntry ?node .
+          
+          # Find the subdivision (article)
+          ?sub jolux:subdivisionIsPartOfResource ?law .
+          ?sub jolux:subdivisionIdentification "{id_query}" .
+          
+          # Get the title from the German expression
+          ?sub jolux:isRealizedBy ?expr .
+          ?expr jolux:language language:DEU .
+          ?expr jolux:title ?title .
+          
+          # Get the ELI (deep link)
+          OPTIONAL {{ ?sub jolux:isEmbodiedBy ?manifestation . ?manifestation jolux:linkToContent ?eli . }}
+        }}
+        LIMIT 1
+        """
+        
+        try:
+            params = {"query": sparql_query, "format": "json"}
+            headers = {"Accept": "application/sparql-results+json"}
+            
+            response = self.client.get(self.endpoint, params=params, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                bindings = data.get("results", {}).get("bindings", [])
+                if bindings:
+                    b = bindings[0]
+                    title = b['title']['value']
+                    # Default ELI if not in SPARQL
+                    eli = b.get('eli', {}).get('value') or f"https://www.fedlex.admin.ch/eli/cc/{sr_number}/de#art_{article_id.lower().replace(' ', '_')}"
+                    
+                    return {
+                        "title": f"{id_query}: {title}",
+                        "link": eli,
+                        "text": f"[Volltext verfügbar unter: {eli}]\nDas Fedlex-Portal unterbindet automatisiertes Auslesen des Volltexts. Dieses Tool liefert jedoch die offizielle Bezeichnung und den direkten Link für rechtssichere Zitate.",
+                        "source": "Offizielles Fedlex-Basisregister (SPARQL)"
+                    }
+        except Exception as e:
+            print(f"Error fetching article text: {e}")
+            
+        return None
+
     def search_fedlex_topics(self, query: str):
         """
         Searches for laws or articles by keywords in the title or labels.

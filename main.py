@@ -28,6 +28,18 @@ def search_law(query: str) -> str:
         paragraph = result.get("paragraph")
         literal = result.get("literal")
         
+        # If it's a specific article, try to fetch authoritative text/title metadata
+        if article:
+            article_details = client.fetch_article_text(sr, article)
+            if article_details:
+                return (
+                    f"### {article_details['title']}\n"
+                    f"**Gesetz:** {title} ({sr})\n"
+                    f"**Link:** {article_details['link']}\n"
+                    f"**Details:** {article_details['text']}\n\n"
+                    f"*Quelle: {article_details['source']}*"
+                )
+        
         response = f"**{title}**\n"
         if article:
             text = f"Article {article}"

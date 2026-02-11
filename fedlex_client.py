@@ -143,6 +143,98 @@ class FedlexClient:
             print(f"Error fetching SR {sr_number}: {e}")
             return None
 
+    def search_fedlex_topics(self, query: str):
+        """
+        Searches for laws or articles by keywords in the title or labels.
+        """
+        keywords = query.split()
+        if not keywords:
+            return []
+            
+        # Build regex filters for all keywords (Logical AND)
+        # We search in ?title which can come from jolux:title or skos:prefLabel
+        regex_filters = " && ".join([f'regex(?title, "{kw}", "i")' for kw in keywords])
+        
+        sparql_query = f"""
+        PREFIX jolux: <http://data.legilux.public.lu/resource/ontology/jolux#>
+        PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+        PREFIX language: <http://publications.europa.eu/resource/authority/language/>
+        PREFIX filetype: <http://publications.europa.eu/resource/authority/file-type/>
+
+        SELECT DISTINCT ?sr ?title ?subLabel ?url
+        WHERE {{
+          # Match titles/labels in German
+          {{ ?res jolux:title ?title . }} UNION {{ ?res skos:prefLabel ?title . }}
+          FILTER(lang(?title) = "de")
+          
+          # The resource could be an Expression realizing a Work, or a Work itself
+          {{
+            ?res jolux:realizes ?work .
+          }} UNION {{
+            # Some metadata might be directly on the Work in some datasets
+            BIND(?res AS ?work)
+            ?work a jolux:ConsolidationAbstract .
+          }}
+          
+          # Logic to get the SR number and Subdivision label
+          {{
+            # Scenario 1: Result is the Law itself
+            ?work a jolux:ConsolidationAbstract .
+            BIND("-" AS ?subLabel)
+            ?work jolux:classifiedByTaxonomyEntry ?node .
+          }} UNION {{
+            # Scenario 2: Result is a Subdivision (Article/Section)
+            ?work jolux:subdivisionIsPartOfResource ?law .
+            ?law jolux:classifiedByTaxonomyEntry ?node .
+            OPTIONAL {{ ?work jolux:subdivisionIdentification ?subLabel }}
+          }}
+          
+          ?node skos:notation ?sr .
+          FILTER({regex_filters})
+          
+          # Optional: Get direct URL if embodied as HTML
+          OPTIONAL {{
+              ?res jolux:isEmbodiedBy ?manifestation .
+              ?manifestation jolux:format filetype:HTML .
+              ?manifestation jolux:linkToContent ?url .
+          }}
+        }}
+        ORDER BY ?sr ?subLabel
+        LIMIT 10
+        """
+        
+        try:
+            params = {"query": sparql_query, "format": "json"}
+            headers = {"Accept": "application/sparql-results+json"}
+            
+            response = self.client.get(self.endpoint, params=params, headers=headers)
+            response.raise_for_status()
+            
+            data = response.json()
+            bindings = data.get("results", {}).get("bindings", [])
+            
+            results = []
+            for b in bindings:
+                res_url = b.get("url", {}).get("value")
+                sr_val = b.get("sr", {}).get("value")
+                sub_val = b.get("subLabel", {}).get("value")
+                
+                # If no direct URL, construct a likely one
+                if not res_url:
+                    res_url = f"https://www.fedlex.admin.ch/eli/cc/{sr_val}/de"
+                    
+                results.append({
+                    "sr": sr_val,
+                    "title": b.get("title", {}).get("value"),
+                    "sub_label": sub_val if sub_val != "-" else None,
+                    "url": res_url
+                })
+            return results
+            
+        except Exception as e:
+            # Fallback for unexpected SPARQL issues
+            return []
+
 if __name__ == "__main__":
     client = FedlexClient()
     print("Testing 'OR 41'...")

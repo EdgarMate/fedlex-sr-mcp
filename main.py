@@ -8,22 +8,37 @@ mcp = FastMCP("Fedlex SR Systematic Law")
 client = FedlexClient()
 
 @mcp.tool()
-def fetch_legislation(sr_number: str) -> str:
+def search_law(query: str) -> str:
     """
-    Fetch Swiss legislation details (Title and URL) by its Systematic Law (SR) number.
+    Search for Swiss legislation by citation (e.g., 'OR 41', 'ZGB 1, Abs. 1', 'Art. 52 lit. c', 'BV') or SR number (e.g., '210').
     
     Args:
-        sr_number: The Systematic Law number (e.g., '210' for Civil Code, '101' for Federal Constitution).
+        query: The law citation or SR number. Examples: 'OR 41, Abs. 2', 'Art. 52 Abs. 1 lit. c', 'ZGB 1', 'BV', '101', '210'.
     """
-    result = client.fetch_article_by_sr(sr_number)
+    result = client.fetch_law_by_citation(query)
     
     if not result:
-        return f"No legislation found for SR number: {sr_number}"
+        return f"No law or article found for query: {query}"
     
     title = result.get("title", "Unknown Title")
     url = result.get("url", "No URL available")
+    sr = result.get("sr", "N/A")
+    article = result.get("article")
+    paragraph = result.get("paragraph")
+    literal = result.get("literal")
     
-    return f"**Title:** {title}\n**URL:** {url}\n**SR Number:** {sr_number}"
+    response = f"**{title}**\n"
+    if article:
+        text = f"Article {article}"
+        if paragraph:
+            text += f", Paragraph {paragraph}"
+        if literal:
+            text += f", Litera/Ziffer {literal}"
+        response += f"Specific Location: {text}\n"
+    response += f"SR Number: {sr}\n"
+    response += f"Link: {url}"
+    
+    return response
 
 if __name__ == "__main__":
     mcp.run()

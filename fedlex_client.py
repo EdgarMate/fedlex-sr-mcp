@@ -1,11 +1,75 @@
 import httpx
 import urllib.parse
-import asyncio
+import json
+import re
+import os
 
 class FedlexClient:
     def __init__(self):
         self.endpoint = "https://fedlex.data.admin.ch/sparqlendpoint"
         self.client = httpx.Client(timeout=30.0, follow_redirects=True)
+        
+        # Load abbreviation mapping
+        mapping_path = os.path.join(os.path.dirname(__file__), "abbreviation_mapping.json")
+        try:
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                self.mapping = json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load abbreviation mapping: {e}")
+            self.mapping = {}
+
+    def fetch_law_by_citation(self, query: str):
+        """
+        Fetches law details by citation (e.g., 'OR 41', 'ZGB 1', 'Art. 41, Abs. 2', 'Art. 52 Abs. 1 lit. c').
+        """
+        query = query.strip()
+        
+        # Pattern 1: SR Number (e.g., "210", "101", "0.312.11")
+        if re.match(r"^[\d\.]+$", query):
+            return self.fetch_article_by_sr(query)
+            
+        # Pattern 2: Citation (e.g., "OR 41", "ZGB 1a", "OR", "OR 41, Abs. 2", "Art. 52 Abs. 1 lit. c")
+        # Supports: Abbr [Art] [, Abs. Num] [, lit./Ziff. ID]
+        # Match: group(1)=Abbr, group(2)=Art, group(3)=Abs, group(4)=lit/Ziffer
+        pattern = r"^([a-zA-Z\u00C0-\u017F]+)(?:\s+([\d\w\.]+))?(?:[, \s]+(?:Abs\.|Absatz)\s+(\d+))?(?:[, \s]+(?:lit\.|Buchstabe|Ziff\.|Ziffer)\s+([\d\w]+))?$"
+        match = re.match(pattern, query, re.IGNORECASE)
+        
+        if match:
+            abbr = match.group(1).upper()
+            art_num = match.group(2)
+            abs_num = match.group(3)
+            lit_num = match.group(4)
+            
+            sr_number = self.mapping.get(abbr)
+            if not sr_number:
+                return None
+                
+            result = self.fetch_article_by_sr(sr_number)
+            if result:
+                if art_num:
+                    # Append fragment for specific article
+                    fragment = f"#art_{art_num.lower()}"
+                    
+                    if abs_num:
+                        # Append fragment for specific paragraph
+                        fragment += f"/para_{abs_num}"
+                        result["paragraph"] = abs_num
+                        
+                        if lit_num:
+                            # Append fragment for specific litera or ziffer
+                            fragment += f"/lbl_{lit_num.lower()}"
+                            result["literal"] = lit_num
+                    elif lit_num:
+                        # Sometimes lit. follows Art. directly (rare but possible in some laws)
+                        fragment += f"/lbl_{lit_num.lower()}"
+                        result["literal"] = lit_num
+                    
+                    result["url"] = f"{result['url']}{fragment}"
+                    result["article"] = art_num
+            
+            return result
+            
+        return None
 
     def fetch_article_by_sr(self, sr_number: str):
         # SPARQL query to find the legislation by SR number
@@ -18,12 +82,11 @@ class FedlexClient:
         
         SELECT ?work ?title ?url
         WHERE {{
-          # 1. Find the taxonomy node for the SR number (casting to string is crucial)
+          # 1. Find the taxonomy node for the SR number
           ?node skos:notation ?notation .
           FILTER (str(?notation) = "{sr_number}") .
           
           # 2. Find the abstract work classified by this node
-          # Use OPTIONAL in case the link is via a different property, but classifiedByTaxonomyEntry is standard for CC
           ?work jolux:classifiedByTaxonomyEntry ?node .
           ?work a jolux:ConsolidationAbstract .
           
@@ -68,7 +131,7 @@ class FedlexClient:
             work_uri = result.get("work", {}).get("value")
             
             if not url and work_uri:
-                 url = f"{work_uri}" # The abstract URI usually redirects or is the base for /de
+                 url = f"{work_uri}/de"
 
             return {
                 "title": title or "Unknown Title",
@@ -82,11 +145,16 @@ class FedlexClient:
 
 if __name__ == "__main__":
     client = FedlexClient()
-    print("Fetching SR 210 (ZGB)...")
-    res = client.fetch_article_by_sr("210")
+    print("Testing 'OR 41'...")
+    res = client.fetch_law_by_citation("OR 41")
     print(res)
     
     print("-" * 20)
-    print("Fetching SR 0.312.11...")
-    res = client.fetch_article_by_sr("0.312.11")
+    print("Testing 'ZGB 1'...")
+    res = client.fetch_law_by_citation("ZGB 1")
+    print(res)
+    
+    print("-" * 20)
+    print("Testing 'BV'...")
+    res = client.fetch_law_by_citation("BV")
     print(res)

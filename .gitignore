@@ -1,10 +1,18 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-.env
+.venv/
 venv/
-ENV/
-*.txt
+
+# Fedlex Dumps & Debug
 debug_*.py
+or_*.txt
+test_results.txt
 test_*.py
-cleanup.py
+!test_targeted.py # Keep some tests if needed, or exclude all
+mapping_dump.txt
+
+# OS
+.DS_Store
+Thumbs.db

@@ -201,63 +201,72 @@ class FedlexClient:
             
         return None
 
-    def search_fedlex_topics(self, query: str):
+    def search_fedlex_topics(self, query_str: str):
         """
-        Searches for laws or articles by keywords in the title or labels.
+        Searches for laws or articles by keywords in titles, labels, or subjects.
         """
-        keywords = query.split()
+        keywords = query_str.split()
         if not keywords:
             return []
             
-        # Build regex filters for all keywords (Logical AND)
-        # We search in ?title which can come from jolux:title or skos:prefLabel
-        regex_filters = " && ".join([f'regex(?title, "{kw}", "i")' for kw in keywords])
+        # Build regex filters for all keywords
+        regex_filters = " && ".join([f'regex(str(?allLabels), "{kw}", "i")' for kw in keywords])
         
         sparql_query = f"""
         PREFIX jolux: <http://data.legilux.public.lu/resource/ontology/jolux#>
         PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
         PREFIX language: <http://publications.europa.eu/resource/authority/language/>
-        PREFIX filetype: <http://publications.europa.eu/resource/authority/file-type/>
+        PREFIX dc: <http://purl.org/dc/elements/1.1/>
 
         SELECT DISTINCT ?sr ?title ?subLabel ?url
         WHERE {{
-          # Match titles/labels in German
-          {{ ?res jolux:title ?title . }} UNION {{ ?res skos:prefLabel ?title . }}
-          FILTER(lang(?title) = "de")
-          
-          # The resource could be an Expression realizing a Work, or a Work itself
           {{
-            ?res jolux:realizes ?work .
-          }} UNION {{
-            # Some metadata might be directly on the Work in some datasets
-            BIND(?res AS ?work)
-            ?work a jolux:ConsolidationAbstract .
-          }}
-          
-          # Logic to get the SR number and Subdivision label
-          {{
-            # Scenario 1: Result is the Law itself
-            ?work a jolux:ConsolidationAbstract .
-            BIND("-" AS ?subLabel)
-            ?work jolux:classifiedByTaxonomyEntry ?node .
-          }} UNION {{
-            # Scenario 2: Result is a Subdivision (Article/Section)
-            ?work jolux:subdivisionIsPartOfResource ?law .
+            # Scenario A: Keyword in Law/Expression title or label
+            {{ ?res jolux:title ?allLabels . }} UNION {{ ?res skos:prefLabel ?allLabels . }}
+            FILTER(lang(?allLabels) = "de")
+            
+            {{
+                ?res jolux:realizes ?law .
+                ?law a jolux:ConsolidationAbstract .
+            }} UNION {{
+                ?res a jolux:ConsolidationAbstract .
+                BIND(?res AS ?law)
+            }}
+            ?law jolux:isRealizedBy ?expr .
+            ?expr jolux:language language:DEU .
+            ?expr jolux:title ?title .
+            
             ?law jolux:classifiedByTaxonomyEntry ?node .
-            OPTIONAL {{ ?work jolux:subdivisionIdentification ?subLabel }}
+            ?node skos:notation ?sr .
+            BIND("-" AS ?subLabel)
+          }}
+          UNION
+          {{
+            # Scenario B: Keyword in Subject/Theme (via Taxonomy)
+            ?concept skos:prefLabel ?allLabels .
+            FILTER(lang(?allLabels) = "de")
+            ?node dc:subject ?concept .
+            ?law jolux:classifiedByTaxonomyEntry ?node .
+            ?law a jolux:ConsolidationAbstract .
+            
+            ?law jolux:isRealizedBy ?expr .
+            ?expr jolux:language language:DEU .
+            ?expr jolux:title ?title .
+            ?node skos:notation ?sr .
+            BIND("-" AS ?subLabel)
           }}
           
-          ?node skos:notation ?sr .
           FILTER({regex_filters})
           
-          # Optional: Get direct URL if embodied as HTML
           OPTIONAL {{
-              ?res jolux:isEmbodiedBy ?manifestation .
-              ?manifestation jolux:format filetype:HTML .
+              ?law jolux:isRealizedBy ?expr_url .
+              ?expr_url jolux:language language:DEU .
+              ?expr_url jolux:isEmbodiedBy ?manifestation .
+              ?manifestation jolux:format <http://publications.europa.eu/resource/authority/file-type/HTML> .
               ?manifestation jolux:linkToContent ?url .
           }}
         }}
-        ORDER BY ?sr ?subLabel
+        ORDER BY ?sr
         LIMIT 10
         """
         
@@ -277,7 +286,6 @@ class FedlexClient:
                 sr_val = b.get("sr", {}).get("value")
                 sub_val = b.get("subLabel", {}).get("value")
                 
-                # If no direct URL, construct a likely one
                 if not res_url:
                     res_url = f"https://www.fedlex.admin.ch/eli/cc/{sr_val}/de"
                     
@@ -288,9 +296,7 @@ class FedlexClient:
                     "url": res_url
                 })
             return results
-            
-        except Exception as e:
-            # Fallback for unexpected SPARQL issues
+        except Exception:
             return []
 
 if __name__ == "__main__":

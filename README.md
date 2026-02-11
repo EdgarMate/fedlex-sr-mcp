@@ -67,5 +67,18 @@ The server exposes a single tool `search_law` that accepts a `query` string.
 ## Data Source
 Data provided by the Swiss Federal Chancellery via [Fedlex](https://fedlex.data.admin.ch/).
 
+## Created with Antigravity
+
+This project was built with **Antigravity**, an agentic AI coding assistant by Google DeepMind.
+
+## Contribution and Feedback
+
+Contributions are welcome! If you have ideas for improvements, new features, or find any issues, please feel free to:
+- Open an issue or pull request.
+- Reach out with suggestions or feedback.
+- Use and adapt this project for your own needs.
+
+Your input is highly valued as we continue to improve tools for accessing Swiss legislation!
+
 ## License
 MIT

@@ -218,28 +218,41 @@ class FedlexClient:
         content_text = None
         found_version = None
         
-        # Clean article_id for CSS (e.g. '41' -> 'art_41')
+        # Clean article_id for CSS (e.g. '41' -> 'art_41', '337b' -> 'art_337_b')
         clean_id = str(article_id).lower().replace("art.", "").strip().replace(" ", "_")
+        # Fedlex often uses underscores before letters in IDs: 337b -> 337_b
+        if re.search(r'\d+[a-z]$', clean_id):
+            clean_id = re.sub(r'(\d+)([a-z])$', r'\1_\2', clean_id)
+        
         target_id = f"art_{clean_id}"
 
         for version in candidates[:3]: # Try only top 3 to keep it snappy
-            filename = f"fedlex-data-admin-ch-eli-cc-{eli_path.replace('/', '-')}-{version}-de-html.html"
-            github_url = f"https://raw.githubusercontent.com/droid-f/fedlex-assets/main/eli/cc/{eli_path}/{version}/de/html/{filename}"
+            # Try bare filename and then with suffixes (some laws are versioned or split)
+            base_filename = f"fedlex-data-admin-ch-eli-cc-{eli_path.replace('/', '-')}-{version}-de-html"
             
-            try:
-                r = self.client.get(github_url, timeout=5.0)
-                if r.status_code == 200:
-                    soup = BeautifulSoup(r.text, 'html.parser')
-                    article_tag = soup.find(id=target_id)
-                    if not article_tag:
-                        article_tag = soup.find(id=re.compile(f"^{target_id}", re.I))
-                    
-                    if article_tag:
-                        content_text = article_tag.get_text(separator="\n", strip=True)
-                        found_version = version
-                        break
-            except Exception:
-                continue
+            # We try the bare name and common suffixes like -10, -1, etc.
+            # Mirror often has -10 or -9 for the latest large consolidations
+            for suffix in ["", "-10", "-9", "-1", "-2", "-3"]:
+                filename = f"{base_filename}{suffix}.html"
+                github_url = f"https://raw.githubusercontent.com/droid-f/fedlex-assets/main/eli/cc/{eli_path}/{version}/de/html/{filename}"
+                
+                try:
+                    r = self.client.get(github_url, timeout=5.0)
+                    if r.status_code == 200:
+                        soup = BeautifulSoup(r.text, 'html.parser')
+                        # Try exact match, then case-insensitive matching
+                        article_tag = soup.find(id=target_id)
+                        if not article_tag:
+                            article_tag = soup.find(id=re.compile(f"^{target_id}", re.I))
+                        
+                        if article_tag:
+                            content_text = article_tag.get_text(separator="\n", strip=True)
+                            found_version = version
+                            break
+                except Exception:
+                    continue
+            if content_text:
+                break
 
         # Construct final response
         eli_link = f"https://www.fedlex.admin.ch/eli/cc/{sr_number}/de#art_{clean_id}"

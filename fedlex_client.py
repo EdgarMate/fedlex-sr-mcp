@@ -29,6 +29,9 @@ class FedlexClient:
         """
         query = query.strip()
         
+        # Normalize: strip "SR", "RS", "RS " prefix
+        query = re.sub(r"^(?:SR|RS|RS)\s*", "", query, flags=re.IGNORECASE)
+        
         # 1. Direct SR Number
         if re.match(r"^[\d\.]+$", query):
             return self.fetch_article_by_sr(query)
@@ -265,9 +268,10 @@ class FedlexClient:
         if not keywords:
             return []
             
-        # Build regex filters for all keywords (Case insensitive)
-        # We search in a combined pool of titles and subjects
-        regex_filters = " && ".join([f'regex(str(?allLabels), "{kw}", "i")' for kw in keywords])
+        # Build the pattern for keywords. 
+        # We match each law against the pool of its labels/subjects.
+        # This is more efficient than a massive UNION of all keywords.
+        kw_values = " ".join([f'"{kw}"' for kw in keywords])
         
         sparql_query = f"""
         PREFIX jolux: <http://data.legilux.public.lu/resource/ontology/jolux#>
@@ -275,48 +279,29 @@ class FedlexClient:
         PREFIX language: <http://publications.europa.eu/resource/authority/language/>
         PREFIX dc: <http://purl.org/dc/elements/1.1/>
 
-        SELECT DISTINCT ?sr ?title ?url (COUNT(?keywordMatch) AS ?rank)
+        SELECT DISTINCT ?sr ?title ?url (COUNT(DISTINCT ?matchedKw) AS ?rank)
         WHERE {{
+          ?law a jolux:ConsolidationAbstract .
+          
+          # Pool all searchable labels for this law
           {{
-            # Keyword in Law Title or skos:prefLabel
-            {{ ?res jolux:title ?allLabels . }} UNION {{ ?res skos:prefLabel ?allLabels . }}
-            BIND(?allLabels AS ?keywordMatch)
-            
-            # Resolve to the main Law (ConsolidationAbstract)
-            {{
-              ?res jolux:realizes ?law .
-              ?law a jolux:ConsolidationAbstract .
-            }} UNION {{
-              ?res a jolux:ConsolidationAbstract .
-              BIND(?res AS ?law)
-            }}
+            {{ ?law jolux:title ?label . }}
+            UNION {{ ?law skos:prefLabel ?label . }}
+            UNION {{ ?law jolux:classifiedByTaxonomyEntry/skos:prefLabel ?label . }}
+            UNION {{ ?law jolux:classifiedByTaxonomyEntry/dc:subject/skos:prefLabel ?label . }}
           }}
-          UNION
-          {{
-            # Keyword in Subject/Theme (via Taxonomy Entry or Concept)
-            {{
-                # Via Classification Node directly
-                ?law jolux:classifiedByTaxonomyEntry ?themeNode .
-                ?themeNode skos:prefLabel ?allLabels .
-            }} 
-            UNION 
-            {{
-                # Via Subject Concept linked to Classification Node
-                ?law jolux:classifiedByTaxonomyEntry ?themeNode .
-                ?themeNode dc:subject ?concept .
-                ?concept skos:prefLabel ?allLabels .
-            }}
-            BIND(?allLabels AS ?keywordMatch)
-            ?law a jolux:ConsolidationAbstract .
-          }}
-
-          # Ensure we have an SR number (from a classification node with a notation)
+          
+          # Match keywords against the labels
+          VALUES ?kw {{ {kw_values} }}
+          FILTER(regex(str(?label), ?kw, "i"))
+          BIND(?kw AS ?matchedKw)
+          
+          # Ensure we have an SR number
           ?law jolux:classifiedByTaxonomyEntry ?srNode .
           ?srNode skos:notation ?sr .
-          # Filter SR: must look like a formal SR number (digits and dots)
           FILTER(regex(str(?sr), "^[0-9]{{1,3}}\\\\.[0-9\\\\.]+$") || regex(str(?sr), "^[0-9]{{1,3}}$"))
           
-          # Get the preferred Title (German if possible, else French/Italian)
+          # Get Title
           OPTIONAL {{
             ?law jolux:isRealizedBy ?expr_de .
             ?expr_de jolux:language language:DEU .
@@ -328,10 +313,8 @@ class FedlexClient:
             ?expr_fr jolux:title ?title_fr .
           }}
           BIND(COALESCE(?title_de, ?title_fr, "Law " + str(?sr)) AS ?title)
-
-          FILTER({regex_filters})
           
-          # Get current URL
+          # Get URL
           OPTIONAL {{
               ?law jolux:isRealizedBy ?expr_url .
               ?expr_url jolux:isEmbodiedBy ?manifestation .

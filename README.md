@@ -11,6 +11,7 @@ A powerful Model Context Protocol (MCP) server for searching and deep-linking Sw
   - **Paragraphs (Absatz)**: `OR 41 Abs. 2` -> `#art_41/para_2`
   - **Letters (Litera)**: `Art. 52 Abs. 1 lit. c` -> `#art_52/para_1/lbl_c`
   - **Numbers (Ziffer)**: `Art. 1 Ziff. 1` -> `#art_1/lbl_1`
+- **Full Text Retrieval**: Automatically fetches the **authoritative article wording** from the official Fedlex mirror (GitHub), bypassing portal restrictions.
 - **Flexible Syntax**: Recognizes various labels like `Art.`, `Abs.`, `Absatz`, `lit.`, `Buchstabe`, `Ziff.`, and `Ziffer` regardless of whether they are provided.
 
 ## Installation
@@ -21,8 +22,7 @@ A powerful Model Context Protocol (MCP) server for searching and deep-linking Sw
 
 ### Dependencies
 Install the required packages:
-```bash
-pip install httpx fastmcp
+pip install httpx fastmcp beautifulsoup4
 ```
 
 ## Setup
